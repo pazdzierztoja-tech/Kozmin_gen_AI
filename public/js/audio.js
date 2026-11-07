@@ -207,6 +207,44 @@ const SoundSystem = {
         break;
       }
 
+      // 7. 'artillery': potężna salwa artylerii akademickiej (świst + soczysty wybuch retro)
+      case 'artillery': {
+        // Świst opadającego pocisku
+        const whistle = this.ctx.createOscillator();
+        const whistleGain = this.ctx.createGain();
+
+        whistle.type = 'sine';
+        whistle.frequency.setValueAtTime(1400, now);
+        whistle.frequency.exponentialRampToValueAtTime(200, now + 0.22);
+
+        whistleGain.gain.setValueAtTime(0.25, now);
+        whistleGain.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
+
+        whistle.connect(whistleGain);
+        whistleGain.connect(this.ctx.destination);
+        whistle.start(now);
+        whistle.stop(now + 0.22);
+
+        // Soczyste basowe uderzenie eksplozji
+        const boomOsc = this.ctx.createOscillator();
+        const boomGain = this.ctx.createGain();
+
+        boomOsc.type = 'sawtooth';
+        boomOsc.frequency.setValueAtTime(170, now + 0.18);
+        boomOsc.frequency.exponentialRampToValueAtTime(28, now + 0.65);
+
+        boomGain.gain.setValueAtTime(0.001, now);
+        boomGain.gain.setValueAtTime(0.45, now + 0.18);
+        boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+
+        boomOsc.connect(boomGain);
+        boomGain.connect(this.ctx.destination);
+
+        boomOsc.start(now + 0.18);
+        boomOsc.stop(now + 0.7);
+        break;
+      }
+
       default:
         console.warn(`Nieznany typ dźwięku: "${type}"`);
     }

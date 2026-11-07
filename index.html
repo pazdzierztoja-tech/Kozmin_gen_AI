@@ -71,8 +71,13 @@
           </div>
         </div>
 
-        <!-- Opcje dźwięku i pomocnicze -->
+        <!-- Opcje dźwięku, artylerii i pomocnicze -->
         <div class="hud-actions">
+          <button id="btn-artillery" class="hud-btn hud-btn--artillery" type="button" aria-label="Wystrzel artylerię" title="Artyleria akademicka (Klawisz R lub kliknięcie)">
+            <span class="artillery-icon">🎯</span>
+            <span class="artillery-label">ARTYLERIA</span>
+            <span id="artillery-charges" class="artillery-badge">3</span>
+          </button>
           <button id="btn-audio-toggle" class="hud-btn" type="button" aria-label="Włącz lub wycisz dźwięk" title="Wycisz / włącz dźwięk">
             <span id="audio-icon">🔊</span>
           </button>
@@ -168,6 +173,13 @@
                     <div class="legend-desc">
                       <strong>Egzaminator:</strong>
                       <span>Unikaj go za wszelką cenę – kontakt oznacza komisyjny wrzesień!</span>
+                    </div>
+                  </div>
+                  <div class="legend-item legend-item--artillery">
+                    <span class="legend-icon">🎯</span>
+                    <div class="legend-desc">
+                      <strong>Artyleria Dziekańska (<kbd>R</kbd>):</strong>
+                      <span>Odrzuca profesora do dalekiej auli i ogłusza go na 4.5 sekundy! (3 ładunki)</span>
                     </div>
                   </div>
                 </div>
@@ -292,8 +304,13 @@
             </button>
           </div>
 
-          <!-- Przycisk sprintu po prawej stronie -->
+          <!-- Przyciski akcji po prawej stronie (Sprint + Artyleria) -->
           <div class="touch-actions">
+            <button id="touch-artillery" class="touch-btn touch-btn--artillery" type="button" aria-label="Artyleria">
+              <span class="touch-artillery-icon">🎯</span>
+              <span class="touch-artillery-label">ARTYLERIA</span>
+              <span id="touch-artillery-charges" class="touch-artillery-badge">3</span>
+            </button>
             <button id="touch-sprint" class="touch-btn touch-btn--sprint" type="button" aria-label="Sprint">
               <span class="touch-sprint-icon">⚡</span>
               <span class="touch-sprint-label">SPRINT</span>

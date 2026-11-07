@@ -1,44 +1,105 @@
 /**
  * js/game.js
- * Główny silnik gry 2D "Kozminski Escape: Polowanie na ECTS"
- * Obsługuje pętlę gry, fizykę gracza, AI profesora, staminę, strefy kampusu ALK oraz UI.
+ * Serce gry 2D: „Kozminski Escape: Polowanie na ECTS”
+ * Akademia Leona Koźmińskiego (ALK) w Warszawie
+ *
+ * Implementuje:
+ * 1. Układ kampusu na Canvasie (Aula A, Biblioteka, Dziekanat, Lab Komputerowy, Patio ALK 🌿)
+ * 2. Gracz (Student) – ruch wektorowy, sprint ze staminą, tarcza, turbo-kawa
+ * 3. Przeciwnik (Egzaminator) – algorytm pościgu skalowany z ECTS, paraliż Gemini AI, komiksowe dymki
+ * 4. Przedmioty – ECTS, Kawa z Patio, Gemini AI, Legitymacja ALK
+ * 5. Pełna integracja z modułem audio SoundSystem.play(...)
  */
 
 (() => {
-  // --- KONFIGURACJA GRY I STALE ---
+  'use strict';
+
+  // =========================================================================
+  // 1. STAŁE, KONFIGURACJA I ARCHITEKTURA KAMPUSU ALK
+  // =========================================================================
   const CANVAS_WIDTH = 800;
   const CANVAS_HEIGHT = 540;
   const TARGET_ECTS = 30;
+
+  // Prędkości i parametry fizyki
+  const PLAYER_BASE_SPEED = 3.3;
+  const PLAYER_SPRINT_SPEED = 5.6;
+  const PROFESSOR_BASE_SPEED = 2.3;
   const MAX_STAMINA = 100;
-  const PLAYER_BASE_SPEED = 3.2;
-  const PLAYER_SPRINT_SPEED = 5.4;
-  const PROFESSOR_BASE_SPEED = 2.4;
+  const STAMINA_DRAIN_RATE = 28;    // /s podczas sprintu
+  const STAMINA_RECOVERY_RATE = 18; // /s podczas marszu/stania
+  const COFFEE_BOOST_DURATION = 5.0; // 5 sekund turbo
+  const GEMINI_FREEZE_DURATION = 3.5; // 3.5 sekundy paraliżu profesora
 
-  // Strefy na kampusie Akademii Leona Koźmińskiego
-  const CAMPUS_ZONES = [
-    { name: 'Budynek D – Korytarz Główny', x: 0, y: 0, w: 380, h: 260, color: '#0e243d' },
-    { name: 'Budynek A – Dziekanat i Sale', x: 420, y: 0, w: 380, h: 260, color: '#122c4b' },
-    { name: 'Zielone Patio ALK', x: 260, y: 220, w: 280, h: 200, color: '#093623' },
-    { name: 'Budynek C – Biblioteka i Aula', x: 0, y: 300, w: 380, h: 240, color: '#0c2038' },
-    { name: 'Kozminski Cafe & Lounge', x: 420, y: 300, w: 380, h: 240, color: '#162842' },
-  ];
-
-  // Kwestie wypowiadane przez profesora w dymku
+  // Komiksowe teksty akademickie profesora
   const PROFESSOR_QUOTES = [
-    '„Gdzie pan biegnie z tym indeksem?! Kolokwium zaraz się zaczyna!”',
-    '„Znam ten wzór na pamięć, a pan ucieka do Kozminski Cafe?!”',
-    '„W bibliografii brakuje trzech kluczowych pozycji!”',
-    '„Proszę pana, nie ma ucieczki przed makroekonomią!”',
-    '„Kto nie zaliczy ćwiczeń, ten spotka się ze mną we wrześniu!”',
-    '„Czy pan myśli, że ECTS-y rosną na drzewach na Patio?!”',
-    '„Zaraz zamknę drzwi do sali egzaminacyjnej!”'
+    '„A gdzie przypis harwardzki?!”',
+    '„Ten bilans się nie zamyka!”',
+    '„Widzę Pana we wrześniu!”',
+    '„USOS właśnie zamknął protokół!”',
+    '„Czy ten esej pisał Pan, czy ChatGPT?!”'
   ];
 
-  // --- ELEMENTY DOM ---
+  // Strefy kampusu z nazwami i współrzędnymi
+  const CAMPUS_ZONES = [
+    { id: 'aula', name: 'Aula A', x: 20, y: 20, w: 260, h: 180, color: '#091c36', label: 'AULA A' },
+    { id: 'dziekanat', name: 'Dziekanat', x: 520, y: 20, w: 260, h: 180, color: '#092140', label: 'DZIEKANAT' },
+    { id: 'patio', name: 'Patio ALK 🌿', x: 260, y: 170, w: 280, h: 200, color: '#063a23', label: 'PATIO ALK 🌿' },
+    { id: 'biblioteka', name: 'Biblioteka', x: 20, y: 340, w: 260, h: 180, color: '#0a1a30', label: 'BIBLIOTEKA' },
+    { id: 'lab', name: 'Lab Komputerowy', x: 520, y: 340, w: 260, h: 180, color: '#081d38', label: 'LAB KOMPUTEROWY' }
+  ];
+
+  // Ściany budynku kampusu (zostawiają szerokie wejścia/korytarze do sal i Patio)
+  const WALLS = [
+    // Obwód zewnętrzny sali: Aula A (lewy górny róg)
+    { x: 20, y: 20, w: 260, h: 14 },
+    { x: 20, y: 20, w: 14, h: 180 },
+    { x: 20, y: 186, w: 170, h: 14 }, // wejście od 190 do 280
+    { x: 266, y: 20, w: 14, h: 100 },
+
+    // Obwód zewnętrzny: Dziekanat (prawy górny róg)
+    { x: 520, y: 20, w: 260, h: 14 },
+    { x: 766, y: 20, w: 14, h: 180 },
+    { x: 610, y: 186, w: 170, h: 14 }, // wejście od 520 do 610
+    { x: 520, y: 20, w: 14, h: 100 },
+
+    // Obwód zewnętrzny: Biblioteka (lewy dolny róg)
+    { x: 20, y: 340, w: 170, h: 14 }, // wejście od 190 do 280
+    { x: 20, y: 340, w: 14, h: 180 },
+    { x: 20, y: 506, w: 260, h: 14 },
+    { x: 266, y: 420, w: 14, h: 100 },
+
+    // Obwód zewnętrzny: Lab Komputerowy (prawy dolny róg)
+    { x: 610, y: 340, w: 170, h: 14 }, // wejście od 520 do 610
+    { x: 766, y: 340, w: 14, h: 180 },
+    { x: 520, y: 506, w: 260, h: 14 },
+    { x: 520, y: 420, w: 14, h: 100 },
+
+    // Wewnętrzne meble / przeszkody w salach
+    { x: 90, y: 80, w: 110, h: 22 },   // Ławki w Auli A
+    { x: 90, y: 125, w: 110, h: 22 },  // Drugi rząd ławek w Auli
+    { x: 600, y: 90, w: 100, h: 40 },  // Lada Dziekanatu
+    { x: 80, y: 400, w: 130, h: 24 },  // Regały Biblioteki
+    { x: 80, y: 450, w: 130, h: 24 },  // Drugi regał Biblioteki
+    { x: 590, y: 400, w: 110, h: 26 }, // Biurka komputerowe
+    { x: 590, y: 450, w: 110, h: 26 }  // Drugi rząd komputerów
+  ];
+
+  // Drzewka ozdobne na Patio ALK (stanowią również naturalne przeszkody)
+  const PATIO_TREES = [
+    { x: 310, y: 220, r: 18 },
+    { x: 490, y: 220, r: 18 },
+    { x: 310, y: 320, r: 18 },
+    { x: 490, y: 320, r: 18 }
+  ];
+
+  // =========================================================================
+  // 2. REFERENCJE DOM
+  // =========================================================================
   const canvas = document.getElementById('game-canvas');
   const ctx = canvas.getContext('2d');
 
-  // HUD
+  // Pasek HUD
   const ectsCounter = document.getElementById('ects-counter');
   const ectsProgress = document.getElementById('ects-progress');
   const staminaCounter = document.getElementById('stamina-counter');
@@ -49,46 +110,47 @@
   const btnPauseToggle = document.getElementById('btn-pause-toggle');
   const pauseIcon = document.getElementById('pause-icon');
 
-  // Dymek profesora
+  // Komiksowy dymek profesora
   const professorBubble = document.getElementById('professor-bubble');
   const bubbleText = document.getElementById('bubble-text');
 
-  // Modale
+  // Ekrany modalne
   const modalStart = document.getElementById('modal-start');
   const modalGameOver = document.getElementById('modal-game-over');
   const modalVictory = document.getElementById('modal-victory');
-
-  const btnStart = document.getElementById('btn-start-game');
-  const btnRestartFail = document.getElementById('btn-restart-game');
+  const btnStartGame = document.getElementById('btn-start-game');
+  const btnRestartGame = document.getElementById('btn-restart-game');
   const btnPlayAgain = document.getElementById('btn-play-again');
 
-  // Statystyki modalne
+  // Metryki podsumowań
   const failEctsCount = document.getElementById('fail-ects-count');
   const failSurvivalTime = document.getElementById('fail-survival-time');
   const failLocationName = document.getElementById('fail-location-name');
   const winTimeCount = document.getElementById('win-time-count');
   const winCoffeeCount = document.getElementById('win-coffee-count');
 
-  // Sterowanie dotykowe
+  // Sterowanie dotykowe (mobilne)
   const touchUp = document.getElementById('touch-up');
   const touchDown = document.getElementById('touch-down');
   const touchLeft = document.getElementById('touch-left');
   const touchRight = document.getElementById('touch-right');
   const touchSprint = document.getElementById('touch-sprint');
 
-  // --- STAN ROZGRYWKI ---
+  // =========================================================================
+  // 3. STAN ROZGRYWKI (STATE)
+  // =========================================================================
   let gameState = 'START'; // 'START' | 'PLAYING' | 'PAUSED' | 'GAMEOVER' | 'VICTORY'
   let ects = 0;
   let stamina = MAX_STAMINA;
-  let coffeesDrunk = 0;
-  let currentZoneName = 'Budynek D – Korytarz Główny';
+  let coffeesCollected = 0;
   let startTime = 0;
   let elapsedTime = 0;
-  let bubbleTimeout = null;
-  let nextQuoteTime = 3000;
+  let currentZone = 'Patio ALK 🌿';
+  let quoteTimer = 3.0; // Odliczanie do następnej kwestii profesora
+  let bubbleHideTimer = 0;
 
-  // Klawiatura i wejście
-  const keys = {
+  // Wejście sterowania (Klawiatura + Dotyk)
+  const input = {
     up: false,
     down: false,
     left: false,
@@ -98,325 +160,460 @@
 
   // Gracz (Student ALK)
   const player = {
-    x: 120,
-    y: 120,
-    size: 26,
+    x: 400,
+    y: 270,
+    radius: 14,
     speed: PLAYER_BASE_SPEED,
     hasShield: false,
-    coffeeBoostTimer: 0,
+    coffeeTimer: 0,
     direction: 'down',
-    legPhase: 0
+    walkCycle: 0
   };
 
   // Przeciwnik (Profesor Egzaminator)
   const professor = {
-    x: 680,
-    y: 440,
-    size: 30,
+    x: 100,
+    y: 100,
+    radius: 16,
     speed: PROFESSOR_BASE_SPEED,
-    direction: 'left',
-    legPhase: 0
+    freezeTimer: 0,
+    direction: 'down',
+    walkCycle: 0,
+    quoteIndex: 0
   };
 
-  // Ściany i przeszkody na kampusie (architektura ALK)
-  const obstacles = [
-    // Pokoje / ściany działowe
-    { x: 380, y: 0, w: 40, h: 180 }, // Kolumny między D a A
-    { x: 380, y: 360, w: 40, h: 180 }, // Kolumny między C a Lounge
-    { x: 0, y: 250, w: 220, h: 25 }, // Ściana sali B-101
-    { x: 580, y: 250, w: 220, h: 25 }, // Ściana Auli Leona Koźmińskiego
-    // Meble i recepcja
-    { x: 140, y: 350, w: 80, h: 40 }, // Lada biblioteczna
-    { x: 600, y: 110, w: 90, h: 40 } // Punkt informacyjny
-  ];
-
-  // Elementy do zebrania (ECTS, Kawa, Sylabus)
+  // Tablica aktywnych przedmiotów na planszy
   let items = [];
 
-  // --- FUNKCJE POMOCNICZE CZASU I FORMATOWANIA ---
-  function formatTime(ms) {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  // =========================================================================
+  // 4. BEZPIECZNE WYWOŁYWANIE DŹWIĘKÓW (SoundSystem)
+  // =========================================================================
+  function playSound(type) {
+    if (window.SoundSystem && typeof window.SoundSystem.play === 'function') {
+      window.SoundSystem.play(type);
+    } else if (window.gameAudio && typeof window.gameAudio.playCollectECTS === 'function') {
+      // Fallback
+      if (type === 'ects') window.gameAudio.playCollectECTS();
+      else if (type === 'coffee') window.gameAudio.playCoffee();
+      else if (type === 'shield') window.gameAudio.playShield();
+      else if (type === 'freeze') window.gameAudio.playAlert();
+      else if (type === 'hit') window.gameAudio.playDefeat();
+      else if (type === 'win') window.gameAudio.playVictory();
+    }
   }
 
-  // Wyświetlanie dymku z kwestią profesora
-  function showProfessorQuote(customQuote = null) {
-    if (gameState !== 'PLAYING') return;
-    const text = customQuote || PROFESSOR_QUOTES[Math.floor(Math.random() * PROFESSOR_QUOTES.length)];
-    bubbleText.textContent = text;
+  function initAudioOnUserGesture() {
+    if (window.SoundSystem && typeof window.SoundSystem.init === 'function') {
+      window.SoundSystem.init();
+    }
+  }
+
+  // =========================================================================
+  // 5. OBSŁUGA DYMKÓW KOMIKSOWYCH PROFESORA
+  // =========================================================================
+  function triggerProfessorQuote(specificText = null) {
+    let quote = specificText;
+    if (!quote) {
+      quote = PROFESSOR_QUOTES[professor.quoteIndex % PROFESSOR_QUOTES.length];
+      professor.quoteIndex++;
+    }
+
+    bubbleText.textContent = quote;
     professorBubble.classList.remove('bubble--hidden');
-
-    if (window.gameAudio) window.gameAudio.playAlert();
-
-    clearTimeout(bubbleTimeout);
-    bubbleTimeout = setTimeout(() => {
-      professorBubble.classList.add('bubble--hidden');
-    }, 4500);
+    bubbleHideTimer = 4.0; // Ukryj po 4 sekundach
   }
 
-  // Sprawdzanie aktualnej strefy kampusu
-  function updateCampusZone() {
-    for (const zone of CAMPUS_ZONES) {
-      if (
-        player.x >= zone.x &&
-        player.x <= zone.x + zone.w &&
-        player.y >= zone.y &&
-        player.y <= zone.y + zone.h
-      ) {
-        if (currentZoneName !== zone.name) {
-          currentZoneName = zone.name;
-          campusStatus.textContent = zone.name;
-        }
-        return;
+  function updateProfessorBubble(delta) {
+    if (bubbleHideTimer > 0) {
+      bubbleHideTimer -= delta;
+      if (bubbleHideTimer <= 0) {
+        professorBubble.classList.add('bubble--hidden');
       }
     }
   }
 
-  // Generowanie elementów na planszy
+  // =========================================================================
+  // 6. SYSTEM KOLIZJI ZE ŚCIANAMI I ARCHITEKTURĄ KAMPUSU
+  // =========================================================================
+  function isCollidingWithWalls(x, y, radius) {
+    // 1. Zewnętrzne granice planszy gry (margines 12px)
+    if (
+      x - radius < 10 ||
+      x + radius > CANVAS_WIDTH - 10 ||
+      y - radius < 10 ||
+      y + radius > CANVAS_HEIGHT - 10
+    ) {
+      return true;
+    }
+
+    // 2. Prostokątne ściany i meble
+    for (let i = 0; i < WALLS.length; i++) {
+      const w = WALLS[i];
+      // Najbliższy punkt prostokąta względem środka koła
+      const closestX = Math.max(w.x, Math.min(x, w.x + w.w));
+      const closestY = Math.max(w.y, Math.min(y, w.y + w.h));
+      const distX = x - closestX;
+      const distY = y - closestY;
+      const distanceSquared = distX * distX + distY * distY;
+
+      if (distanceSquared < radius * radius) {
+        return true;
+      }
+    }
+
+    // 3. Drzewa na Patio
+    for (let i = 0; i < PATIO_TREES.length; i++) {
+      const tree = PATIO_TREES[i];
+      const dist = Math.hypot(x - tree.x, y - tree.y);
+      if (dist < radius + tree.r - 2) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  // =========================================================================
+  // 7. GENEROWANIE PRZEDMIOTÓW (SPAWN POZA ŚCIANAMI)
+  // Przedmioty: 'ects', 'coffee', 'gemini', 'shield'
+  // =========================================================================
   function spawnItem(type) {
     let valid = false;
     let x = 0;
     let y = 0;
     let attempts = 0;
 
-    while (!valid && attempts < 50) {
+    while (!valid && attempts < 80) {
       attempts++;
-      x = 40 + Math.random() * (CANVAS_WIDTH - 80);
-      y = 40 + Math.random() * (CANVAS_HEIGHT - 80);
+      x = 35 + Math.random() * (CANVAS_WIDTH - 70);
+      y = 35 + Math.random() * (CANVAS_HEIGHT - 70);
 
-      // Sprawdź czy nie leży w ścianie
-      let collidesWithWall = false;
-      for (const obs of obstacles) {
-        if (x > obs.x - 20 && x < obs.x + obs.w + 20 && y > obs.y - 20 && y < obs.y + obs.h + 20) {
-          collidesWithWall = true;
-          break;
+      // Przedmiot nie może leżeć w ścianie ani zbyt blisko innej ściany
+      if (!isCollidingWithWalls(x, y, 16)) {
+        // Nie może też leżeć bezpośrednio na studencie
+        const distToPlayer = Math.hypot(x - player.x, y - player.y);
+        if (distToPlayer > 45) {
+          valid = true;
         }
       }
-      if (!collidesWithWall) valid = true;
     }
 
-    items.push({
-      type, // 'ects' | 'coffee' | 'shield'
-      x,
-      y,
-      size: 16,
-      floatOffset: Math.random() * Math.PI * 2
-    });
+    if (valid) {
+      items.push({
+        type: type, // 'ects' | 'coffee' | 'gemini' | 'shield'
+        x: x,
+        y: y,
+        radius: 12,
+        bobPhase: Math.random() * Math.PI * 2
+      });
+    }
   }
 
-  // Inicjalizacja przedmiotów na start
-  function initItems() {
+  function initCampusItems() {
     items = [];
-    // 7 początkowych punktów ECTS
-    for (let i = 0; i < 7; i++) {
-      spawnItem('ects');
-    }
-    // 2 kawy
+    // 8 początkowych zwojów ECTS
+    for (let i = 0; i < 8; i++) spawnItem('ects');
+    // 2 kawy z Patio ALK
     spawnItem('coffee');
     spawnItem('coffee');
-    // 1 sylabus ochronny
+    // 1 moduł Gemini AI
+    spawnItem('gemini');
+    // 1 Legitymacja ALK
     spawnItem('shield');
   }
 
-  // Reset całej rozgrywki
+  // =========================================================================
+  // 8. AKTUALIZACJA STREFY KAMPUSU
+  // =========================================================================
+  function updateCampusZone() {
+    let foundZone = 'Korytarz Kampusu';
+    for (let i = 0; i < CAMPUS_ZONES.length; i++) {
+      const z = CAMPUS_ZONES[i];
+      if (player.x >= z.x && player.x <= z.x + z.w && player.y >= z.y && player.y <= z.y + z.h) {
+        foundZone = z.label;
+        break;
+      }
+    }
+
+    if (currentZone !== foundZone) {
+      currentZone = foundZone;
+      campusStatus.textContent = foundZone;
+    }
+  }
+
+  // =========================================================================
+  // 9. LOGIKA GRY (RESET, START, PAUZA, PORAŻKA, ZWYCIĘSTWO)
+  // =========================================================================
+  function formatTime(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
+
   function resetGame() {
     ects = 0;
     stamina = MAX_STAMINA;
-    coffeesDrunk = 0;
-    player.x = 100;
-    player.y = 100;
-    player.hasShield = false;
-    player.coffeeBoostTimer = 0;
+    coffeesCollected = 0;
 
-    professor.x = 700;
-    professor.y = 440;
+    // Student startuje w bezpiecznym Patio
+    player.x = 400;
+    player.y = 270;
+    player.hasShield = false;
+    player.coffeeTimer = 0;
+
+    // Profesor startuje w gabinecie Auli A
+    professor.x = 90;
+    professor.y = 60;
+    professor.freezeTimer = 0;
+    professor.quoteIndex = 0;
 
     startTime = Date.now();
     elapsedTime = 0;
-    nextQuoteTime = 3000;
+    quoteTimer = 2.5;
+    bubbleHideTimer = 0;
 
-    initItems();
+    initCampusItems();
     updateHUD();
 
+    // Ukryj modale
     modalStart.classList.add('modal-hidden');
     modalStart.classList.remove('modal-active');
     modalGameOver.classList.add('modal-hidden');
     modalGameOver.classList.remove('modal-active');
     modalVictory.classList.add('modal-hidden');
     modalVictory.classList.remove('modal-active');
-    professorBubble.classList.add('bubble--hidden');
 
     gameState = 'PLAYING';
-    showProfessorQuote('„Zaczynamy egzamin! Niech pan spróbuje zebrać 30 ECTS!”');
+    triggerProfessorQuote('„Zaczynamy sesję! Egzamin potrwa do skutku!”');
   }
 
-  // Aktualizacja HUD
+  function triggerGameOver() {
+    gameState = 'GAMEOVER';
+    playSound('hit');
+
+    failEctsCount.textContent = `${ects} / ${TARGET_ECTS}`;
+    failSurvivalTime.textContent = formatTime(elapsedTime);
+    failLocationName.textContent = currentZone;
+
+    modalGameOver.classList.remove('modal-hidden');
+    modalGameOver.classList.add('modal-active');
+    professorBubble.classList.add('bubble--hidden');
+  }
+
+  function triggerVictory() {
+    gameState = 'VICTORY';
+    playSound('win');
+
+    winTimeCount.textContent = formatTime(elapsedTime);
+    winCoffeeCount.textContent = coffeesCollected;
+
+    modalVictory.classList.remove('modal-hidden');
+    modalVictory.classList.add('modal-active');
+    professorBubble.classList.add('bubble--hidden');
+  }
+
   function updateHUD() {
     ectsCounter.textContent = ects;
-    const progressPercent = Math.min(100, Math.round((ects / TARGET_ECTS) * 100));
-    ectsProgress.style.width = `${progressPercent}%`;
+    const pct = Math.min(100, Math.round((ects / TARGET_ECTS) * 100));
+    ectsProgress.style.width = `${pct}%`;
 
     staminaCounter.textContent = `${Math.round(stamina)}%`;
     staminaBar.style.width = `${stamina}%`;
   }
 
-  // Kolizja prostokąt z przeszkodami
-  function canMoveTo(x, y, size) {
-    const half = size / 2;
-    // Granice canvasu
-    if (x - half < 8 || x + half > CANVAS_WIDTH - 8 || y - half < 8 || y + half > CANVAS_HEIGHT - 8) {
-      return false;
-    }
-    // Ściany
-    for (const obs of obstacles) {
-      if (
-        x + half > obs.x &&
-        x - half < obs.x + obs.w &&
-        y + half > obs.y &&
-        y - half < obs.y + obs.h
-      ) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // --- LOGIKA AKTUALIZACJI ROZGRYWKI (UPDATE) ---
+  // =========================================================================
+  // 10. GŁÓWNA AKTUALIZACJA FIZYKI I PRZEBIEGU ROZGRYWKI (UPDATE)
+  // =========================================================================
   function update(delta) {
     if (gameState !== 'PLAYING') return;
 
     elapsedTime = Date.now() - startTime;
+    updateProfessorBubble(delta);
 
-    // Obsługa dymków profesora w czasie
-    if (elapsedTime > nextQuoteTime) {
-      showProfessorQuote();
-      nextQuoteTime = elapsedTime + 9000 + Math.random() * 6000;
+    // Losowe rzucanie akademickimi kwestiami
+    quoteTimer -= delta;
+    if (quoteTimer <= 0) {
+      triggerProfessorQuote();
+      quoteTimer = 7.0 + Math.random() * 5.0;
     }
 
-    // 1. Ruch gracza i sprint
+    // -----------------------------------------------------------------------
+    // A. RUCH GRACZA (STUDENT)
+    // -----------------------------------------------------------------------
     let isSprinting = false;
-    if (keys.sprint && stamina > 0) {
+
+    // Obsługa sprintu pod Spacją lub Shiftem lub dotykiem
+    if (input.sprint && stamina > 0) {
       isSprinting = true;
-      stamina = Math.max(0, stamina - 28 * delta);
+      stamina = Math.max(0, stamina - STAMINA_DRAIN_RATE * delta);
     } else {
-      stamina = Math.min(MAX_STAMINA, stamina + 16 * delta);
+      stamina = Math.min(MAX_STAMINA, stamina + STAMINA_RECOVERY_RATE * delta);
     }
 
-    if (player.coffeeBoostTimer > 0) {
-      player.coffeeBoostTimer -= delta;
-      isSprinting = true; // Turbo tryb po kawie
+    // Turbo-szybkość po kawie z Patio ALK (5s)
+    let turboSpeedMultiplier = 1.0;
+    if (player.coffeeTimer > 0) {
+      player.coffeeTimer -= delta;
+      turboSpeedMultiplier = 1.45;
+      isSprinting = true; // Kawa daje nieprzerwany darmowy sprint
     }
 
-    const currentSpeed = (isSprinting ? PLAYER_SPRINT_SPEED : PLAYER_BASE_SPEED) * (player.coffeeBoostTimer > 0 ? 1.25 : 1);
+    const currentSpeed = (isSprinting ? PLAYER_SPRINT_SPEED : PLAYER_BASE_SPEED) * turboSpeedMultiplier;
 
-    let dx = 0;
-    let dy = 0;
-    if (keys.up) dy -= 1;
-    if (keys.down) dy += 1;
-    if (keys.left) dx -= 1;
-    if (keys.right) dx += 1;
+    // Wektor ruchu
+    let vx = 0;
+    let vy = 0;
+    if (input.up) vy -= 1;
+    if (input.down) vy += 1;
+    if (input.left) vx -= 1;
+    if (input.right) vx += 1;
 
-    if (dx !== 0 && dy !== 0) {
-      // Normalizacja wektora po przekątnej
-      dx *= 0.7071;
-      dy *= 0.7071;
+    // Normalizacja po przekątnej
+    if (vx !== 0 && vy !== 0) {
+      vx *= 0.7071;
+      vy *= 0.7071;
     }
 
-    if (dx !== 0 || dy !== 0) {
-      player.legPhase += delta * 12;
-      if (Math.abs(dx) > Math.abs(dy)) {
-        player.direction = dx > 0 ? 'right' : 'left';
+    if (vx !== 0 || vy !== 0) {
+      player.walkCycle += delta * 14;
+      if (Math.abs(vx) > Math.abs(vy)) {
+        player.direction = vx > 0 ? 'right' : 'left';
       } else {
-        player.direction = dy > 0 ? 'down' : 'up';
+        player.direction = vy > 0 ? 'down' : 'up';
       }
     }
 
-    const nextX = player.x + dx * currentSpeed;
-    const nextY = player.y + dy * currentSpeed;
+    // Płynny ruch osiowy z niezależnym sprawdzaniem kolizji X i Y
+    const nextPlayerX = player.x + vx * currentSpeed;
+    const nextPlayerY = player.y + vy * currentSpeed;
 
-    if (canMoveTo(nextX, player.y, player.size)) {
-      player.x = nextX;
+    if (!isCollidingWithWalls(nextPlayerX, player.y, player.radius)) {
+      player.x = nextPlayerX;
     }
-    if (canMoveTo(player.x, nextY, player.size)) {
-      player.y = nextY;
+    if (!isCollidingWithWalls(player.x, nextPlayerY, player.radius)) {
+      player.y = nextPlayerY;
     }
 
     updateCampusZone();
 
-    // 2. AI Egzaminatora (ściganie studenta z unikaniem ścian)
-    const pAngle = Math.atan2(player.y - professor.y, player.x - professor.x);
-    let profSpeed = PROFESSOR_BASE_SPEED + (ects / TARGET_ECTS) * 1.3; // Profesor przyspiesza z każdym ECTS!
-
-    let profDx = Math.cos(pAngle) * profSpeed;
-    let profDy = Math.sin(pAngle) * profSpeed;
-
-    professor.legPhase += delta * 9;
-    if (Math.abs(profDx) > Math.abs(profDy)) {
-      professor.direction = profDx > 0 ? 'right' : 'left';
+    // -----------------------------------------------------------------------
+    // B. PRZECIWNIK (EGZAMINATOR)
+    // Przyspiesza z każdym ECTS; paraliżowany przez Gemini AI
+    // -----------------------------------------------------------------------
+    if (professor.freezeTimer > 0) {
+      professor.freezeTimer -= delta;
+      // Podczas paraliżu profesor stoi w miejscu
     } else {
-      professor.direction = profDy > 0 ? 'down' : 'up';
+      // Algorytm śledzenia studenta
+      const dx = player.x - professor.x;
+      const dy = player.y - professor.y;
+      const angle = Math.atan2(dy, dx);
+
+      // Profesor przyspiesza z każdym zdobytym ECTS!
+      const ectsSpeedBonus = (ects / TARGET_ECTS) * 1.6;
+      const currentProfSpeed = PROFESSOR_BASE_SPEED + ectsSpeedBonus;
+
+      let pvx = Math.cos(angle) * currentProfSpeed;
+      let pvy = Math.sin(angle) * currentProfSpeed;
+
+      professor.walkCycle += delta * 8;
+      if (Math.abs(pvx) > Math.abs(pvy)) {
+        professor.direction = pvx > 0 ? 'right' : 'left';
+      } else {
+        professor.direction = pvy > 0 ? 'down' : 'up';
+      }
+
+      // Ruch z omijaniem ścian
+      const nextProfX = professor.x + pvx;
+      const nextProfY = professor.y + pvy;
+
+      let moved = false;
+      if (!isCollidingWithWalls(nextProfX, professor.y, professor.radius)) {
+        professor.x = nextProfX;
+        moved = true;
+      }
+      if (!isCollidingWithWalls(professor.x, nextProfY, professor.radius)) {
+        professor.y = nextProfY;
+        moved = true;
+      }
+
+      // Jeśli profesor utknął na narożniku ściany, wykonaj drobny ślizg
+      if (!moved) {
+        if (!isCollidingWithWalls(professor.x + (Math.random() - 0.5) * 4, professor.y + 3, professor.radius)) {
+          professor.y += 2;
+        } else {
+          professor.x += 2;
+        }
+      }
     }
 
-    const profNextX = professor.x + profDx;
-    const profNextY = professor.y + profDy;
-
-    // Próba ruchu w osi X i Y
-    if (canMoveTo(profNextX, professor.y, professor.size)) {
-      professor.x = profNextX;
-    } else if (canMoveTo(professor.x, profNextY + (Math.random() - 0.5) * 4, professor.size)) {
-      professor.y += (Math.random() > 0.5 ? 2 : -2);
-    }
-
-    if (canMoveTo(professor.x, profNextY, professor.size)) {
-      professor.y = profNextY;
-    } else if (canMoveTo(profNextX + (Math.random() - 0.5) * 4, professor.y, professor.size)) {
-      professor.x += (Math.random() > 0.5 ? 2 : -2);
-    }
-
-    // 3. Kolizje z przedmiotami (ECTS, Kawa, Tarcza)
+    // -----------------------------------------------------------------------
+    // C. ZBIERANIE PRZEDMIOTÓW
+    // -----------------------------------------------------------------------
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
       const dist = Math.hypot(player.x - item.x, player.y - item.y);
-      if (dist < (player.size / 2 + item.size / 2 + 4)) {
+
+      if (dist < player.radius + item.radius + 3) {
+        // 1. Zbiór punktu ECTS
         if (item.type === 'ects') {
           ects++;
-          if (window.gameAudio) window.gameAudio.playCollectECTS();
-          // Pojawienie się kolejnego punktu ECTS aż do celu
-          if (ects < TARGET_ECTS) {
-            spawnItem('ects');
+          playSound('ects');
+          if (ects >= TARGET_ECTS) {
+            triggerVictory();
+            return;
           }
+          // Zapewnij stałą obecność ECTS na kampusie
+          spawnItem('ects');
+          // Szansa na dodatkowy spawn przedmiotu specjalnego
           if (Math.random() < 0.25) spawnItem('coffee');
-        } else if (item.type === 'coffee') {
-          coffeesDrunk++;
-          stamina = MAX_STAMINA;
-          player.coffeeBoostTimer = 4.0;
-          if (window.gameAudio) window.gameAudio.playCoffee();
-        } else if (item.type === 'shield') {
-          player.hasShield = true;
-          if (window.gameAudio) window.gameAudio.playShield();
+          if (Math.random() < 0.15 && professor.freezeTimer <= 0) spawnItem('gemini');
         }
+
+        // 2. Kawa z Patio ALK (5s turbo)
+        else if (item.type === 'coffee') {
+          coffeesCollected++;
+          player.coffeeTimer = COFFEE_BOOST_DURATION;
+          stamina = MAX_STAMINA;
+          playSound('coffee');
+          triggerProfessorQuote('„Kawa z Patio?! To nie obniży progu zaliczenia!”');
+        }
+
+        // 3. Gemini AI (paraliżuje profesora na 3.5s)
+        else if (item.type === 'gemini') {
+          professor.freezeTimer = GEMINI_FREEZE_DURATION;
+          playSound('freeze');
+          triggerProfessorQuote('„Czy ten esej pisał Pan, czy ChatGPT?!”');
+        }
+
+        // 4. Legitymacja ALK (tarcza ochronna)
+        else if (item.type === 'shield') {
+          player.hasShield = true;
+          playSound('shield');
+        }
+
         items.splice(i, 1);
       }
     }
 
-    // Sprawdzenie warunku zwycięstwa (30 ECTS)
-    if (ects >= TARGET_ECTS) {
-      triggerVictory();
-      return;
-    }
-
-    // 4. Kolizja z profesorem
-    const distToProfessor = Math.hypot(player.x - professor.x, player.y - professor.y);
-    if (distToProfessor < (player.size / 2 + professor.size / 2)) {
+    // -----------------------------------------------------------------------
+    // D. KOLIZJA STUDENTA Z PROFESOREM
+    // -----------------------------------------------------------------------
+    const distToProf = Math.hypot(player.x - professor.x, player.y - professor.y);
+    if (distToProf < player.radius + professor.radius) {
       if (player.hasShield) {
-        // Tarcza ratuje studenta, odpycha profesora
+        // Legitymacja pochłania jedno uderzenie i odpycha profesora
         player.hasShield = false;
-        showProfessorQuote('„Syllabus pana uratował, ale to było ostatnie ostrzeżenie!”');
-        professor.x += Math.cos(pAngle + Math.PI) * 90;
-        professor.y += Math.sin(pAngle + Math.PI) * 90;
+        playSound('shield');
+        triggerProfessorQuote('„Legitymacja podstemplowana, ale widzę Pana we wrześniu!”');
+
+        // Odpychamy profesora w przeciwnym kierunku
+        const pushAngle = Math.atan2(professor.y - player.y, professor.x - player.x);
+        professor.x += Math.cos(pushAngle) * 90;
+        professor.y += Math.sin(pushAngle) * 90;
       } else {
+        // Złapanie studenta -> Kampania Wrześniowa!
         triggerGameOver();
         return;
       }
@@ -425,228 +622,255 @@
     updateHUD();
   }
 
-  // Porażka: Kampania Wrześniowa
-  function triggerGameOver() {
-    gameState = 'GAMEOVER';
-    if (window.gameAudio) window.gameAudio.playDefeat();
-
-    failEctsCount.textContent = `${ects} / ${TARGET_ECTS}`;
-    failSurvivalTime.textContent = formatTime(elapsedTime);
-    failLocationName.textContent = currentZoneName;
-
-    modalGameOver.classList.remove('modal-hidden');
-    modalGameOver.classList.add('modal-active');
-  }
-
-  // Zwycięstwo: Zaliczony Semestr
-  function triggerVictory() {
-    gameState = 'VICTORY';
-    if (window.gameAudio) window.gameAudio.playVictory();
-
-    winTimeCount.textContent = formatTime(elapsedTime);
-    winCoffeeCount.textContent = coffeesDrunk;
-
-    modalVictory.classList.remove('modal-hidden');
-    modalVictory.classList.add('modal-active');
-  }
-
-  // --- RYSOWANIE GRAFIKI (RENDER) ---
+  // =========================================================================
+  // 11. RYSOWANIE KAMPUSU I GRAFIKI (RENDER)
+  // =========================================================================
   function render() {
     ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // 1. Tło i strefy kampusu ALK
-    for (const zone of CAMPUS_ZONES) {
-      ctx.fillStyle = zone.color;
-      ctx.fillRect(zone.x, zone.y, zone.w, zone.h);
+    // 1. Podłoże i sale kampusu
+    ctx.fillStyle = '#0a1128';
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-      // Oznaczenie Patio ALK z trawnikiem i ścieżkami
-      if (zone.name === 'Zielone Patio ALK') {
-        ctx.fillStyle = '#0f4830';
-        ctx.fillRect(zone.x + 10, zone.y + 10, zone.w - 20, zone.h - 20);
+    // Kafelkowanie korytarza kampusu
+    ctx.strokeStyle = 'rgba(0, 75, 135, 0.15)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < CANVAS_WIDTH; x += 32) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, CANVAS_HEIGHT);
+      ctx.stroke();
+    }
+    for (let y = 0; y < CANVAS_HEIGHT; y += 32) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(CANVAS_WIDTH, y);
+      ctx.stroke();
+    }
 
-        // Ozdobne drzewa na patio
-        drawPatioTree(zone.x + 40, zone.y + 50);
-        drawPatioTree(zone.x + 230, zone.y + 60);
-        drawPatioTree(zone.x + 70, zone.y + 150);
-        drawPatioTree(zone.x + 210, zone.y + 140);
+    // Rysowanie stref (Aula, Dziekanat, Biblioteka, Lab, Patio)
+    for (let i = 0; i < CAMPUS_ZONES.length; i++) {
+      const z = CAMPUS_ZONES[i];
+      ctx.fillStyle = z.color;
+      ctx.fillRect(z.x, z.y, z.w, z.h);
 
-        // Napis na trawie
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-        ctx.font = '700 13px "Chakra Petch", sans-serif';
-        ctx.fillText('🌿 ZIELONE PATIO ALK', zone.x + 65, zone.y + 105);
+      // Obramowanie strefy
+      ctx.strokeStyle = z.id === 'patio' ? '#10b981' : '#004b87';
+      ctx.lineWidth = z.id === 'patio' ? 2 : 1;
+      ctx.strokeRect(z.x, z.y, z.w, z.h);
+
+      // Oznaczenie Patio ALK 🌿
+      if (z.id === 'patio') {
+        // Wewnętrzny trawnik
+        ctx.fillStyle = '#0a422a';
+        ctx.fillRect(z.x + 8, z.y + 8, z.w - 16, z.h - 16);
+
+        // Ścieżki na patio
+        ctx.fillStyle = '#1e382b';
+        ctx.fillRect(z.x + z.w / 2 - 20, z.y + 8, 40, z.h - 16);
+        ctx.fillRect(z.x + 8, z.y + z.h / 2 - 20, z.w - 16, 40);
+
+        // Napis centralny
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.font = '700 15px "Chakra Petch", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('PATIO ALK 🌿', z.x + z.w / 2, z.y + z.h / 2 + 5);
       } else {
-        // Płytki korytarza
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
-        ctx.lineWidth = 1;
-        for (let gx = zone.x; gx < zone.x + zone.w; gx += 40) {
-          ctx.beginPath();
-          ctx.moveTo(gx, zone.y);
-          ctx.lineTo(gx, zone.y + zone.h);
-          ctx.stroke();
-        }
-        for (let gy = zone.y; gy < zone.y + zone.h; gy += 40) {
-          ctx.beginPath();
-          ctx.moveTo(zone.x, gy);
-          ctx.lineTo(zone.x + zone.w, gy);
-          ctx.stroke();
-        }
+        // Napisy sal
+        ctx.fillStyle = 'rgba(242, 169, 0, 0.4)';
+        ctx.font = '700 13px "Chakra Petch", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(z.label, z.x + 18, z.y + 24);
       }
-
-      // Etykieta strefy
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-      ctx.font = '600 11px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText(zone.name.toUpperCase(), zone.x + 14, zone.y + 20);
     }
 
-    // 2. Ściany i przeszkody kampusu
-    ctx.fillStyle = '#06162a';
-    ctx.strokeStyle = '#1a3e68';
+    // 2. Ściany i przeszkody stałe
+    ctx.fillStyle = '#002244';
+    ctx.strokeStyle = '#f2a900';
     ctx.lineWidth = 2;
-    for (const obs of obstacles) {
-      ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-      ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
 
-      // Ozdobny akcent na ścianach (tablice informacyjne ALK)
-      ctx.fillStyle = 'rgba(212, 175, 55, 0.4)';
-      ctx.fillRect(obs.x + 4, obs.y + 4, Math.max(4, obs.w - 8), 4);
-      ctx.fillStyle = '#06162a';
+    for (let i = 0; i < WALLS.length; i++) {
+      const w = WALLS[i];
+      ctx.fillRect(w.x, w.y, w.w, w.h);
+      ctx.strokeRect(w.x, w.y, w.w, w.h);
+
+      // Ozdobna złota wstęga na ścianach ALK
+      ctx.fillStyle = '#ffc740';
+      ctx.fillRect(w.x + 2, w.y + 2, Math.max(2, w.w - 4), Math.min(3, w.h - 4));
+      ctx.fillStyle = '#002244';
     }
 
-    // 3. Przedmioty (ECTS, Kawa, Tarcza)
-    const time = Date.now() * 0.005;
-    for (const item of items) {
-      const floatY = item.y + Math.sin(time + item.floatOffset) * 3;
+    // Drzewka na Patio
+    for (let i = 0; i < PATIO_TREES.length; i++) {
+      const t = PATIO_TREES[i];
+      // Cień
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.beginPath();
+      ctx.arc(t.x + 2, t.y + 4, t.r, 0, Math.PI * 2);
+      ctx.fill();
 
-      if (item.type === 'ects') {
-        // Zwój ECTS / dyplom
-        ctx.shadowColor = '#fbbf24';
+      // Korona
+      ctx.fillStyle = '#065f46';
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#10b981';
+      ctx.beginPath();
+      ctx.arc(t.x - 3, t.y - 3, t.r * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 3. Przedmioty (ECTS, Kawa, Gemini AI, Legitymacja)
+    const timeNow = Date.now() * 0.005;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const bob = Math.sin(timeNow + it.bobPhase) * 3;
+
+      ctx.save();
+      ctx.translate(it.x, it.y + bob);
+
+      if (it.type === 'ects') {
+        // 📜 ECTS
+        ctx.fillStyle = '#f2a900';
+        ctx.shadowColor = '#ffc740';
         ctx.shadowBlur = 10;
-        ctx.fillStyle = '#fbbf24';
         ctx.beginPath();
-        ctx.roundRect(item.x - 9, floatY - 11, 18, 22, 4);
+        ctx.roundRect(-9, -11, 18, 22, 4);
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        ctx.fillStyle = '#78350f';
-        ctx.font = 'bold 9px "Chakra Petch", monospace';
-        ctx.fillText('ECTS', item.x - 11, floatY + 3);
-      } else if (item.type === 'coffee') {
-        // Kubek kawy z logo Kozminski Cafe
-        ctx.shadowColor = '#38bdf8';
-        ctx.shadowBlur = 8;
+        ctx.fillStyle = '#002244';
+        ctx.font = 'bold 8px "Chakra Petch", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('ECTS', 0, 3);
+      } else if (it.type === 'coffee') {
+        // ☕ Kawa z Patio ALK
         ctx.fillStyle = '#f8fafc';
+        ctx.shadowColor = '#004b87';
+        ctx.shadowBlur = 8;
         ctx.beginPath();
-        ctx.roundRect(item.x - 7, floatY - 8, 14, 18, 3);
+        ctx.roundRect(-8, -8, 16, 17, 3);
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        // Pasek na kubku
-        ctx.fillStyle = '#0284c7';
-        ctx.fillRect(item.x - 7, floatY - 2, 14, 6);
-      } else if (item.type === 'shield') {
-        // Syllabus / tarcza
-        ctx.shadowColor = '#10b981';
-        ctx.shadowBlur = 10;
+        // Pasek na kubku kawy
         ctx.fillStyle = '#10b981';
+        ctx.fillRect(-8, -2, 16, 5);
+
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('☕', 0, -10);
+      } else if (it.type === 'gemini') {
+        // 💻 Gemini AI
+        ctx.fillStyle = '#1e1b4b';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#38bdf8';
+        ctx.shadowBlur = 12;
         ctx.beginPath();
-        ctx.arc(item.x, floatY, 11, 0, Math.PI * 2);
+        ctx.roundRect(-10, -9, 20, 18, 4);
         ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('AI', 0, 4);
+      } else if (it.type === 'shield') {
+        // 🪪 Legitymacja ALK
+        ctx.fillStyle = '#004b87';
+        ctx.strokeStyle = '#f2a900';
+        ctx.lineWidth = 1.5;
+        ctx.shadowColor = '#f2a900';
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.roundRect(-10, -8, 20, 16, 3);
+        ctx.fill();
+        ctx.stroke();
         ctx.shadowBlur = 0;
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 10px sans-serif';
-        ctx.fillText('🛡️', item.x - 7, floatY + 4);
+        ctx.font = 'bold 7px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('ALK', 0, 2);
       }
+
+      ctx.restore();
     }
 
-    // 4. Postać Profesora Egzaminatora
-    drawProfessor(professor.x, professor.y, professor.direction, professor.legPhase);
+    // 4. Rysowanie Profesora (Egzaminator)
+    drawProfessor(professor.x, professor.y, professor.direction, professor.walkCycle, professor.freezeTimer > 0);
 
-    // 5. Postać Gracza (Student ALK)
-    drawStudent(player.x, player.y, player.direction, player.legPhase, player.hasShield, player.coffeeBoostTimer > 0);
-
-    // Obramowanie planszy
-    ctx.strokeStyle = '#1e3a5f';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(2, 2, CANVAS_WIDTH - 4, CANVAS_HEIGHT - 4);
+    // 5. Rysowanie Gracza (Student)
+    drawStudent(player.x, player.y, player.direction, player.walkCycle, player.hasShield, player.coffeeTimer > 0);
   }
 
-  // Rysowanie drzewka na patio
-  function drawPatioTree(x, y) {
-    ctx.fillStyle = '#14532d';
-    ctx.beginPath();
-    ctx.arc(x, y, 16, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#22c55e';
-    ctx.beginPath();
-    ctx.arc(x - 3, y - 4, 12, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Rysowanie studenta z plecakiem
-  function drawStudent(x, y, direction, legPhase, hasShield, hasBoost) {
+  // Rysowanie studenta ALK
+  function drawStudent(x, y, dir, cycle, hasShield, isBoosted) {
     ctx.save();
     ctx.translate(x, y);
 
-    // Poświata tarczy lub boosta
+    // Efekt tarczy Legitymacji ALK
     if (hasShield) {
-      ctx.strokeStyle = 'rgba(16, 185, 129, 0.8)';
+      ctx.strokeStyle = '#f2a900';
       ctx.lineWidth = 3;
+      ctx.shadowColor = '#ffc740';
+      ctx.shadowBlur = 14;
       ctx.beginPath();
       ctx.arc(0, 0, 22, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.shadowBlur = 0;
     }
-    if (hasBoost) {
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
+
+    // Efekt turbo po kawie
+    if (isBoosted) {
+      ctx.strokeStyle = '#38bdf8';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(0, 0, 24 + Math.sin(Date.now() * 0.01) * 3, 0, Math.PI * 2);
+      ctx.arc(0, 0, 24 + Math.sin(Date.now() * 0.015) * 3, 0, Math.PI * 2);
       ctx.stroke();
     }
 
     // Cień
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
     ctx.beginPath();
-    ctx.ellipse(0, 14, 13, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 13, 11, 5, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Nogi / buty (animowane)
-    const legOffset = Math.sin(legPhase) * 4;
-    ctx.fillStyle = '#1e293b';
-    ctx.fillRect(-8, 8 + legOffset, 5, 8);
-    ctx.fillRect(3, 8 - legOffset, 5, 8);
+    // Nogi
+    const leg = Math.sin(cycle) * 5;
+    ctx.fillStyle = '#0a1128';
+    ctx.fillRect(-7, 7 + leg, 5, 8);
+    ctx.fillRect(2, 7 - leg, 5, 8);
 
-    // Tułów (bluza w kolorze granatowym ALK z żółtym akcentem)
-    ctx.fillStyle = '#002b49';
+    // Tułów w granatowej bluzie ALK z logo
+    ctx.fillStyle = '#002244';
     ctx.beginPath();
-    ctx.roundRect(-10, -6, 20, 18, 5);
+    ctx.roundRect(-9, -7, 18, 17, 4);
     ctx.fill();
 
-    // Pasek z logo ALK
-    ctx.fillStyle = '#f59e0b';
-    ctx.fillRect(-10, 4, 20, 3);
+    // Złoty zamek / pas bluzki
+    ctx.fillStyle = '#f2a900';
+    ctx.fillRect(-9, 3, 18, 3);
 
-    // Plecak studencki
-    ctx.fillStyle = '#0369a1';
-    if (direction === 'down') {
+    // Plecak
+    ctx.fillStyle = '#004b87';
+    if (dir === 'down' || dir === 'up') {
       ctx.beginPath();
-      ctx.roundRect(-7, -4, 14, 12, 3);
-      ctx.fill();
-    } else if (direction === 'up') {
-      ctx.beginPath();
-      ctx.roundRect(-8, -5, 16, 13, 3);
+      ctx.roundRect(-6, -4, 12, 11, 3);
       ctx.fill();
     }
 
-    // Głowa i czapka z daszkiem / fryzura
-    ctx.fillStyle = '#fbcfe8'; // Skóra
+    // Głowa
+    ctx.fillStyle = '#fed7aa';
     ctx.beginPath();
     ctx.arc(0, -11, 8, 0, Math.PI * 2);
     ctx.fill();
 
-    // Włosy / czapka
-    ctx.fillStyle = '#b45309';
+    // Fryzura studenta
+    ctx.fillStyle = '#78350f';
     ctx.beginPath();
     ctx.arc(0, -13, 8, Math.PI, Math.PI * 2);
     ctx.fill();
@@ -654,27 +878,45 @@
     ctx.restore();
   }
 
-  // Rysowanie profesora z teczką i garniturem
-  function drawProfessor(x, y, direction, legPhase) {
+  // Rysowanie profesora (Egzaminator)
+  function drawProfessor(x, y, dir, cycle, isFrozen) {
     ctx.save();
     ctx.translate(x, y);
 
+    // Efekt zamrożenia Cyber-Freeze przez Gemini AI
+    if (isFrozen) {
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#0284c7';
+      ctx.shadowBlur = 16;
+      ctx.beginPath();
+      ctx.arc(0, 0, 24, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Napis paraliżu nad profesorem
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 10px "Chakra Petch", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('⚡ GEMINI FREEZE ⚡', 0, -28);
+    }
+
     // Cień
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
     ctx.beginPath();
-    ctx.ellipse(0, 16, 15, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 15, 13, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Nogi
-    const legOffset = Math.sin(legPhase) * 4;
+    const leg = isFrozen ? 0 : Math.sin(cycle) * 5;
     ctx.fillStyle = '#0f172a';
-    ctx.fillRect(-9, 10 + legOffset, 6, 9);
-    ctx.fillRect(3, 10 - legOffset, 6, 9);
+    ctx.fillRect(-8, 9 + leg, 5, 8);
+    ctx.fillRect(3, 9 - leg, 5, 8);
 
-    // Garnitur profesorski
-    ctx.fillStyle = '#334155';
+    // Ciemny garnitur
+    ctx.fillStyle = isFrozen ? '#1e293b' : '#1e293b';
     ctx.beginPath();
-    ctx.roundRect(-12, -7, 24, 20, 4);
+    ctx.roundRect(-11, -8, 22, 19, 4);
     ctx.fill();
 
     // Czerwony krawat
@@ -682,13 +924,16 @@
     ctx.beginPath();
     ctx.moveTo(-2, -6);
     ctx.lineTo(2, -6);
-    ctx.lineTo(0, 5);
+    ctx.lineTo(0, 4);
     ctx.closePath();
     ctx.fill();
 
-    // Teczka z ocenami niedostatecznymi
-    ctx.fillStyle = '#78350f';
-    ctx.fillRect(11, 0, 6, 12);
+    // Formularz z oceną 2.0 w ręku profesora
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(10, -2, 8, 12);
+    ctx.fillStyle = '#ef4444';
+    ctx.font = 'bold 7px sans-serif';
+    ctx.fillText('2.0', 11, 6);
 
     // Głowa z siwymi włosami i okularami
     ctx.fillStyle = '#fde68a';
@@ -711,11 +956,13 @@
     ctx.restore();
   }
 
-  // --- GŁÓWNA PĘTLA GRY (GAME LOOP) ---
-  let lastFrameTime = performance.now();
+  // =========================================================================
+  // 12. PĘTLA GRY (GAME LOOP)
+  // =========================================================================
+  let lastTime = performance.now();
   function gameLoop(now) {
-    const delta = Math.min((now - lastFrameTime) / 1000, 0.1);
-    lastFrameTime = now;
+    const delta = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
 
     update(delta);
     render();
@@ -723,82 +970,92 @@
     requestAnimationFrame(gameLoop);
   }
 
-  // --- OBSŁUGA ZDARZEŃ I KONTROLEK ---
+  // =========================================================================
+  // 13. STEROWANIE I REJESTRACJA ZDARZEŃ (INPUT & EVENTS)
+  // =========================================================================
   function setupControls() {
-    // Klawiatura
+    // A. Klawiatura (WASD, Strzałki, Spacja, Shift)
     window.addEventListener('keydown', (e) => {
-      if (['ArrowUp', 'KeyW'].includes(e.code)) keys.up = true;
-      if (['ArrowDown', 'KeyS'].includes(e.code)) keys.down = true;
-      if (['ArrowLeft', 'KeyA'].includes(e.code)) keys.left = true;
-      if (['ArrowRight', 'KeyD'].includes(e.code)) keys.right = true;
-      if (['ShiftLeft', 'ShiftRight', 'Space'].includes(e.code)) keys.sprint = true;
+      initAudioOnUserGesture();
 
-      // Klawisz pauzy 'P'
+      if (e.code === 'KeyW' || e.code === 'ArrowUp') input.up = true;
+      if (e.code === 'KeyS' || e.code === 'ArrowDown') input.down = true;
+      if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = true;
+      if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = true;
+      if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        input.sprint = true;
+      }
+
+      // Klawisz 'P' (Pauza)
       if (e.code === 'KeyP') togglePause();
     });
 
     window.addEventListener('keyup', (e) => {
-      if (['ArrowUp', 'KeyW'].includes(e.code)) keys.up = false;
-      if (['ArrowDown', 'KeyS'].includes(e.code)) keys.down = false;
-      if (['ArrowLeft', 'KeyA'].includes(e.code)) keys.left = false;
-      if (['ArrowRight', 'KeyD'].includes(e.code)) keys.right = false;
-      if (['ShiftLeft', 'ShiftRight', 'Space'].includes(e.code)) keys.sprint = false;
+      if (e.code === 'KeyW' || e.code === 'ArrowUp') input.up = false;
+      if (e.code === 'KeyS' || e.code === 'ArrowDown') input.down = false;
+      if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = false;
+      if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = false;
+      if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        input.sprint = false;
+      }
     });
 
-    // Kontrolki dotykowe (D-pad)
-    const bindTouchButton = (btn, keyName) => {
+    // B. Przyciski ekranowe / dotykowe (D-pad i Sprint)
+    const bindTouch = (btn, keyProp) => {
       if (!btn) return;
-      const start = (e) => {
+      const onPress = (e) => {
         e.preventDefault();
-        keys[keyName] = true;
+        initAudioOnUserGesture();
+        input[keyProp] = true;
         btn.classList.add('active');
-        if (window.gameAudio) window.gameAudio.init();
       };
-      const end = (e) => {
+      const onRelease = (e) => {
         e.preventDefault();
-        keys[keyName] = false;
+        input[keyProp] = false;
         btn.classList.remove('active');
       };
-      btn.addEventListener('touchstart', start, { passive: false });
-      btn.addEventListener('touchend', end);
-      btn.addEventListener('touchcancel', end);
-      btn.addEventListener('mousedown', start);
-      btn.addEventListener('mouseup', end);
-      btn.addEventListener('mouseleave', end);
+
+      btn.addEventListener('touchstart', onPress, { passive: false });
+      btn.addEventListener('touchend', onRelease);
+      btn.addEventListener('touchcancel', onRelease);
+      btn.addEventListener('mousedown', onPress);
+      btn.addEventListener('mouseup', onRelease);
+      btn.addEventListener('mouseleave', onRelease);
     };
 
-    bindTouchButton(touchUp, 'up');
-    bindTouchButton(touchDown, 'down');
-    bindTouchButton(touchLeft, 'left');
-    bindTouchButton(touchRight, 'right');
-    bindTouchButton(touchSprint, 'sprint');
+    bindTouch(touchUp, 'up');
+    bindTouch(touchDown, 'down');
+    bindTouch(touchLeft, 'left');
+    bindTouch(touchRight, 'right');
+    bindTouch(touchSprint, 'sprint');
 
-    // Przyciski w HUD
+    // C. Przyciski w HUD (Dźwięk, Pauza)
     btnAudioToggle.addEventListener('click', () => {
-      if (window.gameAudio) {
-        window.gameAudio.init();
-        const isMuted = window.gameAudio.toggleMute();
+      initAudioOnUserGesture();
+      if (window.SoundSystem) {
+        const isMuted = window.SoundSystem.toggleMute();
         audioIcon.textContent = isMuted ? '🔇' : '🔊';
       }
     });
 
     btnPauseToggle.addEventListener('click', () => {
+      initAudioOnUserGesture();
       togglePause();
     });
 
-    // Przyciski w modalach
-    btnStart.addEventListener('click', () => {
-      if (window.gameAudio) window.gameAudio.init();
+    // D. Przyciski w modalach
+    btnStartGame.addEventListener('click', () => {
+      initAudioOnUserGesture();
       resetGame();
     });
 
-    btnRestartFail.addEventListener('click', () => {
-      if (window.gameAudio) window.gameAudio.init();
+    btnRestartGame.addEventListener('click', () => {
+      initAudioOnUserGesture();
       resetGame();
     });
 
     btnPlayAgain.addEventListener('click', () => {
-      if (window.gameAudio) window.gameAudio.init();
+      initAudioOnUserGesture();
       resetGame();
     });
   }
@@ -807,17 +1064,19 @@
     if (gameState === 'PLAYING') {
       gameState = 'PAUSED';
       pauseIcon.textContent = '▶️';
-      showProfessorQuote('„Pauza? W sesji nie ma przerw, drogi panie!”');
+      triggerProfessorQuote('„Pauza w sesji?! Nie ma takiego paragrafu w regulaminie!”');
     } else if (gameState === 'PAUSED') {
       gameState = 'PLAYING';
       pauseIcon.textContent = '⏸️';
     }
   }
 
-  // Start aplikacji
+  // =========================================================================
+  // 14. INICJALIZACJA GRY PO ZAŁADOWANIU DOM
+  // =========================================================================
   window.addEventListener('DOMContentLoaded', () => {
     setupControls();
-    initItems();
+    initCampusItems();
     updateHUD();
     requestAnimationFrame(gameLoop);
   });
